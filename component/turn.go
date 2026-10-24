@@ -8,7 +8,7 @@
 package component
 
 import (
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // 轮次状态白名单（与既有数据面一致）。

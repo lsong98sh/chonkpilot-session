@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // TokenDivisor 是估算口径除数：token 数 ≈ 字符数 / TokenDivisor。

@@ -10,7 +10,7 @@ package session
 import (
 	"strings"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // BriefMessages 构造一段消息的【简化态原文】（内核 `store.ChatMsg`；组装侧用）。

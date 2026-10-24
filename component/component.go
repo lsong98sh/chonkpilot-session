@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // Clock 是时间源（测试注入；nil = 系统时钟）。

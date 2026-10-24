@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // mkToolCall 造一条工具调用（参数已序列化）。

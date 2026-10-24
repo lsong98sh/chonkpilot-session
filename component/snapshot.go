@@ -7,7 +7,7 @@ package component
 import (
 	"encoding/json"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // SetSnapshotCmd 写会话快照（`SessionID` 必填；`History` 为空 = 清空快照）。

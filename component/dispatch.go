@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // ParticipantID 是参与者标识（2G §6.1 `Context.Self`）。

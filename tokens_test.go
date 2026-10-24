@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // TestToolsTokenEstimate：工具 schema（名 + 描述 + 参数 JSON）计入固定开销。

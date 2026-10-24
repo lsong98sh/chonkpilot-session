@@ -6,7 +6,7 @@
 // 逐字段一致（Type 固定 function）。
 package session
 
-import "github.com/chonkpilot/chonkpilot-session/store"
+import "github.com/lsong98sh/chonkpilot-session/store"
 
 // toolCallTypeFunction 是快照 ToolCall.type 的固定取值（OpenAI 兼容形态）。
 const toolCallTypeFunction = "function"

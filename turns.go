@@ -2,7 +2,7 @@
 // `assemble.go` 的 turn 边界部分，行为逐字不变）。
 package session
 
-import "github.com/chonkpilot/chonkpilot-session/store"
+import "github.com/lsong98sh/chonkpilot-session/store"
 
 // 系统注入的用户消息 Kind（**不新开 turn 边界**——仍属当前 turn）：
 //   - KindContinue：S6 断链 / length 自动续写注入的「继续」；

@@ -12,7 +12,7 @@
 // `EstimateTokensOfMessages`（字符数 / 2）。两者均已内化到本组件（不依赖 data）。
 package session
 
-import "github.com/chonkpilot/chonkpilot-session/store"
+import "github.com/lsong98sh/chonkpilot-session/store"
 
 // Project 按 turn 分组拼接（**三段结构**），另返回本次投影使用的三段计数
 // （`LocateZones` 原样带回；组装结果 `Assembly.Zones` 据此换算 turn id，避免二次定位漂移）。

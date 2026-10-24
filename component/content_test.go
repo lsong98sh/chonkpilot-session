@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // scripted 是可控 Dispatcher（记录输入、返回固定决策）。

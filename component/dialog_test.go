@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // fakeClock 是可推进的时钟（断言 updated_at 排序）。

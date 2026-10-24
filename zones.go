@@ -3,7 +3,7 @@
 // 2026-10-24（Persist Provider 改造）：自 `chonkpilot-data` 内化到本组件，算法逐字不变。
 package session
 
-import "github.com/chonkpilot/chonkpilot-session/store"
+import "github.com/lsong98sh/chonkpilot-session/store"
 
 // LocateFullTurnCount 计算「保留完整」的轮数（口径 V/W，见 41 I-21）：
 //

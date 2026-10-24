@@ -4,7 +4,7 @@ package component
 import (
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-session/store"
+	"github.com/lsong98sh/chonkpilot-session/store"
 )
 
 // seedTree 建一个「主 session + 子会话 + 消息/轮次/快照/任务树/inbox」的对话，返回 ids。

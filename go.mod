@@ -1,4 +1,4 @@
-module github.com/chonkpilot/chonkpilot-session
+module github.com/lsong98sh/chonkpilot-session
 
 go 1.26.0
 

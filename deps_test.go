@@ -20,7 +20,7 @@ var depsAllowed = []string{
 }
 
 // selfModule 是本模块前缀（组件内部包互相引用不算外部依赖）。
-const selfModule = "github.com/chonkpilot/chonkpilot-session"
+const selfModule = "github.com/lsong98sh/chonkpilot-session"
 
 func TestDepsPureLib(t *testing.T) {
 	out, err := exec.Command("go", "list", "-f",
