@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // ── 命令 / 结果 ─────────────────────────────────────────────────
@@ -98,11 +98,11 @@ func (c *Component) CreateDialog(cmd CreateDialogCmd) (CreateDialogRes, error) {
 	if err := validateParticipants(cmd.Participants); err != nil {
 		return CreateDialogRes{}, err
 	}
-	dialogID, err := data.NewDialogID()
+	dialogID, err := c.store.NewID()
 	if err != nil {
 		return CreateDialogRes{}, Err(CodeBackend, "生成 dialog_id: %v", err)
 	}
-	sessionID, err := data.NewDialogID() // 同一 UUID v4 生成器（session 与 dialog 无关联）
+	sessionID, err := c.store.NewID() // 同一 id 生成器（session 与 dialog 无关联）
 	if err != nil {
 		return CreateDialogRes{}, Err(CodeBackend, "生成 session_id: %v", err)
 	}
@@ -117,7 +117,7 @@ func (c *Component) CreateDialog(cmd CreateDialogCmd) (CreateDialogRes, error) {
 		return CreateDialogRes{}, Err(CodeBackend, "打开 prjusr: %v", err)
 	}
 	defer release()
-	if err := putDialogRow(cat, DialogRow{DialogID: dialogID, Title: title, Kind: kind, MainSessionID: sessionID, UpdatedAt: c.nowStr()}); err != nil {
+	if err := c.putDialogRow(cat, DialogRow{DialogID: dialogID, Title: title, Kind: kind, MainSessionID: sessionID, UpdatedAt: c.nowStr()}); err != nil {
 		return CreateDialogRes{}, Err(CodeBackend, "写 dialogs 行: %v", err)
 	}
 	c.emit(Event{Kind: EventDialogCreated, DialogID: dialogID, SessionID: sessionID, Title: title, SessionKind: kind})
@@ -162,7 +162,7 @@ func (c *Component) EnsureDialog(cmd EnsureDialogCmd) (EnsureDialogRes, error) {
 	// 库空 / 无主 session → 补主 session（幂等键 = DialogID 已存在）。
 	sessionID := cmd.MainSessionID
 	if sessionID == "" {
-		sessionID = mustID()
+		sessionID = c.mustID()
 	}
 	kind := firstNonEmpty(cmd.Kind, "main")
 	title := firstNonEmpty(cmd.Title, sessionID)
@@ -174,7 +174,7 @@ func (c *Component) EnsureDialog(cmd EnsureDialogCmd) (EnsureDialogRes, error) {
 		return EnsureDialogRes{}, Err(CodeBackend, "打开 prjusr: %v", err)
 	}
 	defer release2()
-	if err := putDialogRow(cat2, DialogRow{DialogID: cmd.DialogID, Title: title, Kind: kind, MainSessionID: sessionID, UpdatedAt: c.nowStr()}); err != nil {
+	if err := c.putDialogRow(cat2, DialogRow{DialogID: cmd.DialogID, Title: title, Kind: kind, MainSessionID: sessionID, UpdatedAt: c.nowStr()}); err != nil {
 		return EnsureDialogRes{}, Err(CodeBackend, "写 dialogs 行: %v", err)
 	}
 	if !exists { // 只有首次落库才发事件（半创建补齐不算「新建对话」）
@@ -206,7 +206,7 @@ func (c *Component) RenameDialog(cmd RenameDialogCmd) error {
 	}
 	sid := sval(main["session_id"])
 	now := c.nowStr()
-	if err := sdb.Table("sessions").UpdateIn(sid, func(rec data.Record) data.Record {
+	if err := sdb.Table("sessions").UpdateIn(sid, func(rec store.Record) store.Record {
 		if len(rec) == 0 {
 			return nil
 		}
@@ -224,7 +224,7 @@ func (c *Component) RenameDialog(cmd RenameDialogCmd) error {
 		return Err(CodeBackend, "打开 prjusr: %v", err)
 	}
 	defer relCat()
-	if err := cat.Table("dialogs").UpdateIn(cmd.DialogID, func(rec data.Record) data.Record {
+	if err := cat.Table("dialogs").UpdateIn(cmd.DialogID, func(rec store.Record) store.Record {
 		if len(rec) == 0 {
 			return nil
 		}
@@ -264,7 +264,7 @@ func (c *Component) RenameSession(cmd RenameSessionCmd) error {
 	}
 	isMain := sval(rec["parent_id"]) == ""
 	now := c.nowStr()
-	if err := sdb.Table("sessions").UpdateIn(cmd.SessionID, func(cur data.Record) data.Record {
+	if err := sdb.Table("sessions").UpdateIn(cmd.SessionID, func(cur store.Record) store.Record {
 		if len(cur) == 0 {
 			return nil
 		}
@@ -283,7 +283,7 @@ func (c *Component) RenameSession(cmd RenameSessionCmd) error {
 			return Err(CodeBackend, "打开 prjusr: %v", err)
 		}
 		defer relCat()
-		if err := cat.Table("dialogs").UpdateIn(cmd.DialogID, func(r data.Record) data.Record {
+		if err := cat.Table("dialogs").UpdateIn(cmd.DialogID, func(r store.Record) store.Record {
 			if len(r) == 0 {
 				return nil
 			}
@@ -319,7 +319,7 @@ func (c *Component) DeleteDialog(cmd DeleteDialogCmd) error {
 		}
 	}
 	release()
-	if err := data.DeleteDialog(c.prjUsrPath, cmd.DialogID); err != nil {
+	if err := c.store.DeleteDialog(cmd.DialogID); err != nil {
 		return Err(CodeBackend, "删对话库: %v", err)
 	}
 	if existed {
@@ -336,7 +336,7 @@ func (c *Component) ListDialogs() ([]DialogRow, error) {
 	}
 	defer release()
 	out := make([]DialogRow, 0, 16)
-	if err := cat.Table("dialogs").ForEach(func(key string, rec data.Record) error {
+	if err := cat.Table("dialogs").ForEach(func(key string, rec store.Record) error {
 		out = append(out, DialogRow{
 			DialogID:  firstNonEmpty(sval(rec["dialog_id"]), key),
 			Title:     sval(rec["title"]),
@@ -395,7 +395,7 @@ func (c *Component) CreateSession(cmd CreateSessionCmd) (CreateSessionRes, error
 
 	sessionID := cmd.SessionID
 	if sessionID == "" {
-		sessionID = mustID()
+		sessionID = c.mustID()
 	}
 	kind := firstNonEmpty(cmd.Kind, "sub_chat")
 	if err := c.writeSession(cmd.DialogID, sessionID, firstNonEmpty(cmd.Title, sessionID), kind, cmd.ParentID, cmd.Participants); err != nil {
@@ -416,7 +416,7 @@ func (c *Component) ListSessions(cmd ListSessionsCmd) (ListSessionsRes, error) {
 	}
 	defer release()
 	out := make([]SessionRow, 0, 8)
-	if err := sdb.Table("sessions").ForEach(func(key string, rec data.Record) error {
+	if err := sdb.Table("sessions").ForEach(func(key string, rec store.Record) error {
 		out = append(out, SessionRow{
 			SessionID: firstNonEmpty(sval(rec["session_id"]), key),
 			Title:     sval(rec["title"]),
@@ -451,7 +451,7 @@ func (c *Component) writeSession(dialogID, sessionID, title, kind, parentID stri
 	}
 	defer release()
 	now := c.nowStr()
-	rec := data.Record{
+	rec := store.Record{
 		"session_id": sessionID,
 		"title":      title,
 		"kind":       kind,
@@ -489,9 +489,9 @@ func validateTitle(title string) error {
 	return nil
 }
 
-// mustID 生成 UUID v4（失败 → 空串，由调用方 writeSession 拦截）。
-func mustID() string {
-	id, err := data.NewDialogID()
+// mustID 经 Store 生成 id（失败 → 空串，由调用方 writeSession 拦截）。
+func (c *Component) mustID() string {
+	id, err := c.store.NewID()
 	if err != nil {
 		return ""
 	}

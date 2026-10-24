@@ -1,19 +1,19 @@
-// chat 消息与 data 内核消息的最小互转（本组件**唯一**类型转换点）。
+// chat 消息与快照契约消息的最小互转（本组件**唯一**类型转换点）。
 //
-// 存在理由：token 估算与【简化态原文】构造的唯一实现都在 `chonkpilot-data`
-// （`EstimateTokensOfMessages` / `BriefMessages` / `LocateZones`），本组件必须按 data 内核类型
-// 调用它们——绝不另写一套口径。形状与宿主 `src/lib/llm/server/chatadapter.go` 的
-// `ChatMessageToData` / `ChatMessageFromData` 逐字段一致（Type 固定 function）。
+// 2026-10-24（Persist Provider 改造）：契约类型已内化到 `store.ChatMsg / store.ToolCall`
+// （与既有数据面 JSON 逐字段一致），组件不再 import `chonkpilot-data`。
+// 形状与宿主 `src/lib/llm/server/chatadapter.go` 的 `ChatMessageToData` / `ChatMessageFromData`
+// 逐字段一致（Type 固定 function）。
 package session
 
-import "github.com/chonkpilot/chonkpilot-data"
+import "github.com/chonkpilot/chonkpilot-session/store"
 
-// toolCallTypeFunction 是快照 ToolCall.type 的固定取值（OpenAI 兼容形态，data 侧既有口径）。
+// toolCallTypeFunction 是快照 ToolCall.type 的固定取值（OpenAI 兼容形态）。
 const toolCallTypeFunction = "function"
 
-// toDataMessage 把 chat 消息折成 data 内核消息（快照 / 落库形态）。
-func toDataMessage(m Message) data.ChatMsg {
-	out := data.ChatMsg{
+// toDataMessage 把 chat 消息折成快照契约消息（落库形态）。
+func toDataMessage(m Message) store.ChatMsg {
+	out := store.ChatMsg{
 		Role:       m.Role,
 		Kind:       m.Kind,
 		Content:    m.Content,
@@ -22,9 +22,9 @@ func toDataMessage(m Message) data.ChatMsg {
 		Meta:       m.Meta,
 	}
 	if len(m.ToolCalls) > 0 {
-		out.ToolCalls = make([]data.ToolCall, 0, len(m.ToolCalls))
+		out.ToolCalls = make([]store.ToolCall, 0, len(m.ToolCalls))
 		for _, c := range m.ToolCalls {
-			var tc data.ToolCall
+			var tc store.ToolCall
 			tc.ID = c.ID
 			tc.Type = toolCallTypeFunction
 			tc.Function.Name = c.Name
@@ -35,8 +35,8 @@ func toDataMessage(m Message) data.ChatMsg {
 	return out
 }
 
-// fromDataMessage 把 data 内核消息还原为 chat 消息（ToolCall.type 丢弃，chat 形态无该字段）。
-func fromDataMessage(m data.ChatMsg) Message {
+// fromDataMessage 把快照契约消息还原为 chat 消息（ToolCall.type 丢弃，chat 形态无该字段）。
+func fromDataMessage(m store.ChatMsg) Message {
 	out := Message{
 		Role:       m.Role,
 		Kind:       m.Kind,
@@ -57,11 +57,11 @@ func fromDataMessage(m data.ChatMsg) Message {
 }
 
 // toDataMessages 批量转换（nil 安全：空入参 → nil）。
-func toDataMessages(msgs []Message) []data.ChatMsg {
+func toDataMessages(msgs []Message) []store.ChatMsg {
 	if len(msgs) == 0 {
 		return nil
 	}
-	out := make([]data.ChatMsg, 0, len(msgs))
+	out := make([]store.ChatMsg, 0, len(msgs))
 	for _, m := range msgs {
 		out = append(out, toDataMessage(m))
 	}
@@ -69,7 +69,7 @@ func toDataMessages(msgs []Message) []data.ChatMsg {
 }
 
 // fromDataMessages 批量转换（nil 安全：空入参 → nil）。
-func fromDataMessages(msgs []data.ChatMsg) []Message {
+func fromDataMessages(msgs []store.ChatMsg) []Message {
 	if len(msgs) == 0 {
 		return nil
 	}

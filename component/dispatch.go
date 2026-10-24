@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // ParticipantID 是参与者标识（2G §6.1 `Context.Self`）。
@@ -153,7 +153,7 @@ func (c *Component) Dispatch(cmd DispatchCmd) (DispatchRes, error) {
 		if hit != nil {
 			release()
 			return DispatchRes{
-				MessageID: sval(hit[data.KeyField]),
+				MessageID: sval(hit[store.KeyField]),
 				TurnID:    sval(hit["turn_id"]),
 				Decisions: nil,
 				Replayed:  true,
@@ -170,7 +170,7 @@ func (c *Component) Dispatch(cmd DispatchCmd) (DispatchRes, error) {
 	turnID := sval(turnRec["turn_id"])
 	opened := false
 	if !hasTurn {
-		turnID = mustID()
+		turnID = c.mustID()
 		opened = true
 	}
 
@@ -200,7 +200,7 @@ func (c *Component) Dispatch(cmd DispatchCmd) (DispatchRes, error) {
 		now = c.nowStr()
 	}
 	msgKey := newMessageKey(time.Now())
-	msgRec := data.Record{
+	msgRec := store.Record{
 		"session_id": cmd.SessionID,
 		"turn_id":    turnID,
 		"role":       role,
@@ -213,9 +213,9 @@ func (c *Component) Dispatch(cmd DispatchCmd) (DispatchRes, error) {
 	if cmd.From.ID != "" && cmd.From.Kind != "human" && cmd.From.Kind != "llm" {
 		msgRec["sender_agent"] = cmd.From.ID // 群聊发言者（agent）；人类 / 单 llm 不写键
 	}
-	if err := sdb.Update(func(tx *data.Tx) error {
+	if err := sdb.Update(func(tx store.Tx) error {
 		if opened {
-			if err := tx.Put("turns", turnID, data.Record{
+			if err := tx.Put("turns", turnID, store.Record{
 				"turn_id": turnID, "session_id": cmd.SessionID, "status": "running",
 				"created_at": now, "updated_at": now,
 			}); err != nil {
@@ -267,7 +267,7 @@ func hasDecision(ds []Decision, kind DecisionKind) bool {
 }
 
 // participantsOf 读 sessions 行的 participants（缺失 → nil）。
-func participantsOf(rec data.Record) []Participant {
+func participantsOf(rec store.Record) []Participant {
 	raw, ok := rec["participants"]
 	if !ok || raw == nil {
 		return nil
@@ -290,9 +290,9 @@ func participantsOf(rec data.Record) []Participant {
 }
 
 // messagesByClientMsgID 按 (session_id, client_msg_id) 命中一条消息（P0 索引）。
-func messagesByClientMsgID(sdb *data.DB, sessionID, clientMsgID string) (data.Record, error) {
-	recs, _, err := sdb.Table("messages").Query(data.Query{
-		Where: data.Record{"session_id": sessionID, "client_msg_id": clientMsgID}, Limit: 1,
+func messagesByClientMsgID(sdb store.DB, sessionID, clientMsgID string) (store.Record, error) {
+	recs, _, err := sdb.Table("messages").Query(store.Query{
+		Where: store.Record{"session_id": sessionID, "client_msg_id": clientMsgID}, Limit: 1,
 	})
 	if err != nil || len(recs) == 0 {
 		return nil, err

@@ -8,7 +8,7 @@
 package component
 
 import (
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // 轮次状态白名单（与既有数据面一致）。
@@ -82,10 +82,10 @@ func (c *Component) OpenTurn(cmd OpenTurnCmd) (OpenTurnRes, error) {
 	}
 	turnID := cmd.TurnID
 	if turnID == "" {
-		turnID = mustID()
+		turnID = c.mustID()
 	}
 	now := c.nowStr()
-	if err := sdb.Table("turns").Insert(turnID, data.Record{
+	if err := sdb.Table("turns").Insert(turnID, store.Record{
 		"turn_id": turnID, "session_id": cmd.SessionID, "status": TurnRunning,
 		"created_at": now, "updated_at": now,
 	}); err != nil {
@@ -146,7 +146,7 @@ func (c *Component) closeTurn(dialogID, sessionID, turnID, status, reason string
 		return c.mapOpenErr(err, dialogID)
 	}
 	defer release()
-	var trec data.Record
+	var trec store.Record
 	has, err := sdb.Table("turns").Get(turnID, &trec)
 	if err != nil {
 		return Err(CodeBackend, "读 turns: %v", err)
@@ -161,13 +161,13 @@ func (c *Component) closeTurn(dialogID, sessionID, turnID, status, reason string
 		return Err(CodeTurnClosed, "turn %s 已关闭（status=%s）", turnID, sval(trec["status"]))
 	}
 	now := c.nowStr()
-	if err := sdb.Update(func(tx *data.Tx) error {
-		cur := data.Record{}
+	if err := sdb.Update(func(tx store.Tx) error {
+		cur := store.Record{}
 		if _, err := tx.Get("turns", turnID, &cur); err != nil {
 			return err
 		}
 		if len(cur) == 0 {
-			return data.ErrNotFound
+			return store.ErrNotFound
 		}
 		cur["status"] = status
 		cur["finish_reason"] = reason
@@ -194,10 +194,10 @@ func (c *Component) closeTurn(dialogID, sessionID, turnID, status, reason string
 }
 
 // findOpenTurn 找该会话最新的 running turn（无 → ok=false）。
-func findOpenTurn(sdb *data.DB, sessionID string) (data.Record, bool, error) {
-	var best data.Record
+func findOpenTurn(sdb store.DB, sessionID string) (store.Record, bool, error) {
+	var best store.Record
 	bestCreated := ""
-	err := sdb.Table("turns").ForEach(func(_ string, rec data.Record) error {
+	err := sdb.Table("turns").ForEach(func(_ string, rec store.Record) error {
 		if sval(rec["session_id"]) != sessionID || sval(rec["status"]) != TurnRunning {
 			return nil
 		}
@@ -211,8 +211,8 @@ func findOpenTurn(sdb *data.DB, sessionID string) (data.Record, bool, error) {
 }
 
 // touchTurn 事务内刷新 turn.updated_at（不存在 → 忽略，交由调用方判据）。
-func touchTurn(tx *data.Tx, turnID, now string) error {
-	rec := data.Record{}
+func touchTurn(tx store.Tx, turnID, now string) error {
+	rec := store.Record{}
 	ok, err := tx.Get("turns", turnID, &rec)
 	if err != nil || !ok {
 		return err
@@ -222,8 +222,8 @@ func touchTurn(tx *data.Tx, turnID, now string) error {
 }
 
 // touchSession 事务内刷新 session.updated_at（行不存在 → 忽略）。
-func touchSession(tx *data.Tx, sessionID, now string) error {
-	rec := data.Record{}
+func touchSession(tx store.Tx, sessionID, now string) error {
+	rec := store.Record{}
 	ok, err := tx.Get("sessions", sessionID, &rec)
 	if err != nil || !ok {
 		return err

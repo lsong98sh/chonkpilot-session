@@ -1,13 +1,12 @@
 package component
 
 import (
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // scripted 是可控 Dispatcher（记录输入、返回固定决策）。
@@ -27,13 +26,12 @@ func (s *scripted) Dispatch(ctx Context, u Utterance) []Decision {
 }
 
 // newCompD 建带 Dispatcher 的组件（其余同 newComp）。
-func newCompD(t *testing.T, d Dispatcher) (*Component, *nopSink, string) {
+func newCompD(t *testing.T, d Dispatcher) (*Component, *nopSink, *store.Memory) {
 	t.Helper()
-	dir := t.TempDir()
-	prjUsr := filepath.Join(dir, "prjusr", "chonkpilot.db")
+	st := store.NewMemory()
 	sink := &nopSink{}
 	c, err := New(Options{
-		PrjUsrPath: prjUsr,
+		Store:      st,
 		Sink:       sink,
 		Clock:      &fakeClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)},
 		Dispatcher: d,
@@ -41,12 +39,12 @@ func newCompD(t *testing.T, d Dispatcher) (*Component, *nopSink, string) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return c, sink, prjUsr
+	return c, sink, st
 }
 
 // TestSinkReentrantDispatch 用例 14：sink 内再 Dispatch 不 panic、不死锁（提交后才回调）。
 func TestSinkReentrantDispatch(t *testing.T) {
-	prjUsr := filepath.Join(t.TempDir(), "prjusr", "chonkpilot.db")
+	st := store.NewMemory()
 	var (
 		c        *Component
 		dlg      CreateDialogRes
@@ -67,7 +65,7 @@ func TestSinkReentrantDispatch(t *testing.T) {
 		}()
 	})
 	var err error
-	c, err = New(Options{PrjUsrPath: prjUsr, Sink: sink, Clock: &fakeClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}})
+	c, err = New(Options{Store: st, Sink: sink, Clock: &fakeClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -86,16 +84,16 @@ func TestSinkReentrantDispatch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("sink 内再 Dispatch 发生死锁")
 	}
-	db := openDlg(t, prjUsr, dlg.DialogID)
+	db := openDlg(t, st, dlg.DialogID)
 	if msgs := messagesOf(t, db, dlg.SessionID); len(msgs) != 2 {
 		t.Fatalf("重入后应有 2 条消息，实际 %d", len(msgs))
 	}
 }
 
-// openDlg 短开对话库（测试读断言用）。
-func openDlg(t *testing.T, prjUsr, dialogID string) *data.DB {
+// openDlg 打开对话库（测试读断言用）。
+func openDlg(t *testing.T, st *store.Memory, dialogID string) store.DB {
 	t.Helper()
-	db, release, err := data.OpenDialog(prjUsr, dialogID)
+	db, release, err := st.OpenDialog(dialogID)
 	if err != nil {
 		t.Fatalf("OpenDialog: %v", err)
 	}
@@ -104,10 +102,10 @@ func openDlg(t *testing.T, prjUsr, dialogID string) *data.DB {
 }
 
 // messagesOf 读会话消息（created_at 升序）。
-func messagesOf(t *testing.T, db *data.DB, sessionID string) []data.Record {
+func messagesOf(t *testing.T, db store.DB, sessionID string) []store.Record {
 	t.Helper()
-	recs, _, err := db.Table("messages").Query(data.Query{
-		Where: data.Record{"session_id": sessionID}, OrderBy: "created_at",
+	recs, _, err := db.Table("messages").Query(store.Query{
+		Where: store.Record{"session_id": sessionID}, OrderBy: "created_at",
 	})
 	if err != nil {
 		t.Fatalf("query messages: %v", err)
@@ -118,7 +116,7 @@ func messagesOf(t *testing.T, db *data.DB, sessionID string) []data.Record {
 // TestDispatchSingleChat 用例 4：human 说 → 落库 + 自动开轮 + 事件序；llm 回 + Finish → 关轮。
 func TestDispatchSingleChat(t *testing.T) {
 	d := &scripted{decisions: []Decision{{Kind: DecisionPersist}, {Kind: DecisionDeliverLocal}}}
-	c, sink, prjUsr := newCompD(t, d)
+	c, sink, st := newCompD(t, d)
 	dlg, err := c.CreateDialog(CreateDialogCmd{Title: "单聊"})
 	if err != nil {
 		t.Fatalf("CreateDialog: %v", err)
@@ -143,12 +141,12 @@ func TestDispatchSingleChat(t *testing.T) {
 		t.Fatalf("Dispatcher 上下文不符: %+v", d.calls)
 	}
 
-	db := openDlg(t, prjUsr, dlg.DialogID)
+	db := openDlg(t, st, dlg.DialogID)
 	msgs := messagesOf(t, db, dlg.SessionID)
 	if len(msgs) != 1 || sval(msgs[0]["role"]) != "user" || sval(msgs[0]["client_msg_id"]) != "c1" {
 		t.Fatalf("消息落库不符: %+v", msgs)
 	}
-	var trec data.Record
+	var trec store.Record
 	if ok, _ := db.Table("turns").Get(res.TurnID, &trec); !ok || sval(trec["status"]) != TurnRunning {
 		t.Fatalf("应自动开 running turn: %+v", trec)
 	}
@@ -179,7 +177,7 @@ func TestDispatchSingleChat(t *testing.T) {
 // TestDispatchIdempotent 用例 5：同 client_msg_id 二次 → Replayed、无新事件、无新消息。
 func TestDispatchIdempotent(t *testing.T) {
 	d := &scripted{decisions: []Decision{{Kind: DecisionPersist}}}
-	c, sink, prjUsr := newCompD(t, d)
+	c, sink, st := newCompD(t, d)
 	dlg, _ := c.CreateDialog(CreateDialogCmd{Title: "幂等"})
 	sink.take()
 	cmd := DispatchCmd{
@@ -204,7 +202,7 @@ func TestDispatchIdempotent(t *testing.T) {
 	if len(d.calls) != 1 {
 		t.Fatalf("幂等命中不应再调 Dispatcher: %d", len(d.calls))
 	}
-	db := openDlg(t, prjUsr, dlg.DialogID)
+	db := openDlg(t, st, dlg.DialogID)
 	if msgs := messagesOf(t, db, dlg.SessionID); len(msgs) != 1 {
 		t.Fatalf("应只有 1 条消息: %d", len(msgs))
 	}
@@ -213,7 +211,7 @@ func TestDispatchIdempotent(t *testing.T) {
 // TestDispatchHumanForcePersist 用例 6：dispatcher 只返 Finish 也照样落库。
 func TestDispatchHumanForcePersist(t *testing.T) {
 	d := &scripted{decisions: []Decision{{Kind: DecisionFinish}}}
-	c, _, prjUsr := newCompD(t, d)
+	c, _, st := newCompD(t, d)
 	dlg, _ := c.CreateDialog(CreateDialogCmd{Title: "强制"})
 	res, err := c.Dispatch(DispatchCmd{
 		DialogID: dlg.DialogID, SessionID: dlg.SessionID,
@@ -225,7 +223,7 @@ func TestDispatchHumanForcePersist(t *testing.T) {
 	if !hasDecision(res.Decisions, DecisionPersist) {
 		t.Fatalf("human 应被强制补 Persist: %+v", res.Decisions)
 	}
-	db := openDlg(t, prjUsr, dlg.DialogID)
+	db := openDlg(t, st, dlg.DialogID)
 	if msgs := messagesOf(t, db, dlg.SessionID); len(msgs) != 1 {
 		t.Fatalf("human 消息应落库: %d", len(msgs))
 	}
@@ -298,7 +296,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	dlg, _ := c.CreateDialog(CreateDialogCmd{Title: "快照"})
 	sink.take()
 
-	hist := []data.ChatMsg{
+	hist := []store.ChatMsg{
 		{Role: "user", Content: "第一句"},
 		{Role: "assistant", Content: "回复", Reasoning: "think"},
 	}

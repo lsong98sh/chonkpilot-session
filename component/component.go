@@ -2,23 +2,24 @@
 //
 // 与父包 `chonkpilot-session` 的分工：
 //
-//	父包（纯 lib）  上下文组装 / 压缩 / 任务树运行态 —— 不读 MQ / DB（既有边界不变）
-//	本包（存储侧）  对话（一树一库）的读写与事件 —— 只碰 `data`，不碰 MQ（topic 映射在 P4 adapter）
+//	父包（纯 lib）  上下文组装 / 压缩 / 任务树运行态 —— 不读 MQ / DB
+//	本包（存储侧）  对话（一树一库）的读写与事件 —— **只依赖 store 端口**，不碰 MQ、不碰具体数据库
 //
-// 布局（P0 已落地）：prjusr `dialogs` 目录 + `<prjusr>/dialogs/dialog-<hex(dialog_id)>.db`
+// 持久化（2026-10-24，Persist Provider）：具体「怎么切库、怎么落盘」由注入的 `store.Store`
+// 决定（bbolt 一树一库 / 单库 / Oracle / 内存均可）；组件只决定表名、主键与行字段。
+//
+// 布局（一树一库的 bbolt 实现）：prjusr `dialogs` 目录 + `<prjusr>/dialogs/dialog-<hex(dialog_id)>.db`
 // （一库 = 一棵会话树：主 session 1 行 + 子会话 N 行 + messages / turns / tasktree / inbox / snapshot）。
 //
 // 寻址（2G §4.1）：所有会话类调用必须给 `DialogID`；组件**不做** session → dialog 全局反查。
-// 读路径切换（facade 改走本组件）属 P3；本包在 P1 只被测试与后续阶段调用。
 package component
 
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // Clock 是时间源（测试注入；nil = 系统时钟）。
@@ -26,8 +27,8 @@ type Clock interface{ Now() time.Time }
 
 // Options 是组件构造参数。
 type Options struct {
-	// PrjUsrPath 是 prjusr 主库路径（`<workDir>/.chonkpilot/users/<用户名>/chonkpilot.db`）。
-	PrjUsrPath string
+	// Store 是持久化端口（必填；实现决定切分与落盘方式）。
+	Store store.Store
 	// Sink 是事件出口（nil = 不广播）。
 	Sink Sink
 	// Clock 时间源（nil = time.Now）。
@@ -38,7 +39,7 @@ type Options struct {
 
 // Component 是 Session 组件的存储侧门面（对话 / 会话树 / 轮次 / 消息 / 快照）。
 type Component struct {
-	prjUsrPath string
+	store      store.Store
 	sink       Sink
 	clock      Clock
 	dispatcher Dispatcher
@@ -46,12 +47,11 @@ type Component struct {
 
 // New 构造组件（不打开任何库；调用按需短开）。
 func New(opts Options) (*Component, error) {
-	path := strings.TrimSpace(opts.PrjUsrPath)
-	if path == "" {
-		return nil, errors.New("component: prj_usr_path required")
+	if opts.Store == nil {
+		return nil, errors.New("component: store required（Persist Provider 未注入）")
 	}
 	return &Component{
-		prjUsrPath: path,
+		store:      opts.Store,
 		sink:       opts.Sink,
 		clock:      opts.Clock,
 		dispatcher: opts.Dispatcher,
@@ -64,7 +64,7 @@ func (c *Component) nowStr() string {
 	if c.clock != nil {
 		t = c.clock.Now()
 	}
-	return t.UTC().Format(data.RFC3339FixedNano)
+	return t.UTC().Format(store.RFC3339FixedNano)
 }
 
 // emit 同步投递事件（Sink 约定：只入队、不 panic、不长阻塞）。
@@ -77,19 +77,19 @@ func (c *Component) emit(ev Event) {
 }
 
 // catalog 短开 prjusr 主库（配对 release）。
-func (c *Component) catalog() (*data.DB, func(), error) {
-	return data.OpenSharedLayer(c.prjUsrPath, data.LayerPrjUsr)
+func (c *Component) catalog() (store.DB, func(), error) {
+	return c.store.Catalog()
 }
 
 // openDialog 短开对话库（配对 release）。
-func (c *Component) openDialog(dialogID string) (*data.DB, func(), error) {
+func (c *Component) openDialog(dialogID string) (store.DB, func(), error) {
 	if dialogID == "" {
 		return nil, nil, Err(CodeDialogRequired, "dialog_id required")
 	}
-	return data.OpenDialog(c.prjUsrPath, dialogID)
+	return c.store.OpenDialog(dialogID)
 }
 
-// dialogRow 是 prjusr `dialogs` 表的一行（列表展示用副本）。
+// DialogRow 是 prjusr `dialogs` 表的一行（列表展示用副本）。
 type DialogRow struct {
 	DialogID string `json:"dialog_id"`
 	Title    string `json:"title"`
@@ -110,20 +110,20 @@ type SessionRow struct {
 }
 
 // getDialogRow 读 dialogs 行（ok=false = 不存在）。
-func getDialogRow(cat *data.DB, dialogID string) (data.Record, bool, error) {
-	var rec data.Record
+func getDialogRow(cat store.DB, dialogID string) (store.Record, bool, error) {
+	var rec store.Record
 	ok, err := cat.Table("dialogs").Get(dialogID, &rec)
 	return rec, ok, err
 }
 
-// putDialogRow 写 / 覆盖 dialogs 行。
-func putDialogRow(cat *data.DB, row DialogRow) error {
+// putDialogRow 写 / 覆盖 dialogs 行（`file` 命名由 Store 决定）。
+func (c *Component) putDialogRow(cat store.DB, row DialogRow) error {
 	if row.DialogID == "" {
 		return Err(CodeDialogRequired, "dialog_id required")
 	}
-	rec := data.Record{
+	rec := store.Record{
 		"dialog_id":  row.DialogID,
-		"file":       data.DialogFileName(row.DialogID),
+		"file":       c.store.DialogFileName(row.DialogID),
 		"title":      row.Title,
 		"kind":       row.Kind,
 		"updated_at": row.UpdatedAt,
@@ -135,9 +135,9 @@ func putDialogRow(cat *data.DB, row DialogRow) error {
 }
 
 // mainSession 返回对话库内的主 session 行（parent_id == ""；无 → ok=false）。
-func mainSession(sdb *data.DB) (data.Record, bool, error) {
-	var best data.Record
-	err := sdb.Table("sessions").ForEach(func(_ string, rec data.Record) error {
+func mainSession(sdb store.DB) (store.Record, bool, error) {
+	var best store.Record
+	err := sdb.Table("sessions").ForEach(func(_ string, rec store.Record) error {
 		if sval(rec["parent_id"]) != "" {
 			return nil
 		}
@@ -150,8 +150,8 @@ func mainSession(sdb *data.DB) (data.Record, bool, error) {
 }
 
 // sessionByID 读库内某 session 行。
-func sessionByID(sdb *data.DB, sessionID string) (data.Record, bool, error) {
-	var rec data.Record
+func sessionByID(sdb store.DB, sessionID string) (store.Record, bool, error) {
+	var rec store.Record
 	ok, err := sdb.Table("sessions").Get(sessionID, &rec)
 	return rec, ok, err
 }
@@ -167,7 +167,7 @@ func sval(v any) string {
 	return fmt.Sprint(v)
 }
 
-// isNotFound 判定 data 层的「行不存在」（Table.Delete 对缺失键恒返回该错误）。
+// isNotFound 判定存储层的「行不存在」。
 func isNotFound(err error) bool {
-	return errors.Is(err, data.ErrNotFound)
+	return errors.Is(err, store.ErrNotFound)
 }

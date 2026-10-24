@@ -1,14 +1,12 @@
 package component
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // fakeClock 是可推进的时钟（断言 updated_at 排序）。
@@ -56,29 +54,37 @@ func (s *nopSink) count(kind EventKind) int {
 	return n
 }
 
-// newComp 建临时 prjusr + 组件（带 fake clock 与事件 sink）。
-func newComp(t *testing.T) (*Component, *nopSink, string) {
+// newComp 建内存 Store + 组件（带 fake clock 与事件 sink）。
+func newComp(t *testing.T) (*Component, *nopSink, *store.Memory) {
 	t.Helper()
-	dir := t.TempDir()
-	prjUsr := filepath.Join(dir, "prjusr", "chonkpilot.db")
+	st := store.NewMemory()
 	sink := &nopSink{}
-	c, err := New(Options{PrjUsrPath: prjUsr, Sink: sink, Clock: &fakeClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}})
+	c, err := New(Options{Store: st, Sink: sink, Clock: &fakeClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// 预热 prjusr（建表 + 迁移），配对释放以允许 TempDir 清理。
-	db, release, err := data.OpenSharedLayer(prjUsr, data.LayerPrjUsr)
-	if err != nil {
-		t.Fatalf("预热 prjusr: %v", err)
-	}
-	_ = db
-	release()
-	return c, sink, prjUsr
+	return c, sink, st
 }
 
-// TestCreateDialog 用例 1（创建）：dialog_id ≠ session_id、文件/目录行/主 session 齐备、事件一次。
+// dialogRowOf 读目录行（ok=false = 不存在）。
+func dialogRowOf(t *testing.T, st *store.Memory, dialogID string) (store.Record, bool) {
+	t.Helper()
+	cat, release, err := st.Catalog()
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+	defer release()
+	var row store.Record
+	ok, err := cat.Table("dialogs").Get(dialogID, &row)
+	if err != nil {
+		t.Fatalf("读 dialogs 行: %v", err)
+	}
+	return row, ok
+}
+
+// TestCreateDialog 用例 1（创建）：dialog_id ≠ session_id、库/目录行/主 session 齐备、事件一次。
 func TestCreateDialog(t *testing.T) {
-	c, sink, prjUsr := newComp(t)
+	c, sink, st := newComp(t)
 	res, err := c.CreateDialog(CreateDialogCmd{Title: "对话一"})
 	if err != nil {
 		t.Fatalf("CreateDialog: %v", err)
@@ -86,23 +92,20 @@ func TestCreateDialog(t *testing.T) {
 	if res.DialogID == "" || res.SessionID == "" || res.DialogID == res.SessionID {
 		t.Fatalf("id 不合法: %+v", res)
 	}
-	if _, err := os.Stat(data.DialogDBPath(prjUsr, res.DialogID)); err != nil {
-		t.Fatalf("对话库文件缺失: %v", err)
+	if _, release, err := st.ExistingDialog(res.DialogID); err != nil {
+		t.Fatalf("对话库缺失: %v", err)
+	} else {
+		release()
 	}
-	cat, release, err := data.OpenSharedLayer(prjUsr, data.LayerPrjUsr)
-	if err != nil {
-		t.Fatalf("open prjusr: %v", err)
-	}
-	var row data.Record
-	if ok, err := cat.Table("dialogs").Get(res.DialogID, &row); err != nil || !ok {
-		t.Fatalf("dialogs 行缺失: ok=%v err=%v", ok, err)
+	row, ok := dialogRowOf(t, st, res.DialogID)
+	if !ok {
+		t.Fatal("dialogs 行缺失")
 	}
 	for _, k := range []string{"dialog_id", "file", "title", "kind", "updated_at"} {
 		if _, has := row[k]; !has {
 			t.Fatalf("dialogs 行缺字段 %s: %+v", k, row)
 		}
 	}
-	release()
 
 	sessions, err := c.ListSessions(ListSessionsCmd{DialogID: res.DialogID})
 	if err != nil {
@@ -118,8 +121,8 @@ func TestCreateDialog(t *testing.T) {
 
 // TestEnsureDialogIdempotent 用例 1（幂等）：重复 Ensure 不新建、不重复发事件。
 func TestEnsureDialogIdempotent(t *testing.T) {
-	c, sink, _ := newComp(t)
-	id, _ := data.NewDialogID()
+	c, sink, st := newComp(t)
+	id, _ := st.NewID()
 	first, err := c.EnsureDialog(EnsureDialogCmd{DialogID: id, Title: "幂等"})
 	if err != nil {
 		t.Fatalf("Ensure #1: %v", err)
@@ -148,15 +151,14 @@ func TestEnsureDialogIdempotent(t *testing.T) {
 
 // TestEnsureDialogHalfCreated 半创建态（库在、无主 session）→ 补齐且只补一次。
 func TestEnsureDialogHalfCreated(t *testing.T) {
-	c, _, prjUsr := newComp(t)
-	id, _ := data.NewDialogID()
+	c, _, st := newComp(t)
+	id, _ := st.NewID()
 	// 只建空库（无 session 行、无目录行）
-	db, release, err := data.OpenDialog(prjUsr, id)
-	if err != nil {
+	if _, release, err := st.OpenDialog(id); err != nil {
 		t.Fatalf("OpenDialog: %v", err)
+	} else {
+		release()
 	}
-	_ = db
-	release()
 
 	first, err := c.EnsureDialog(EnsureDialogCmd{DialogID: id, MainSessionID: "main-1", Title: "半创建"})
 	if err != nil {
@@ -288,19 +290,19 @@ func TestRename(t *testing.T) {
 	}
 }
 
-// TestDeleteIdempotent：删除幂等（文件与行）、事件只发一次。
+// TestDeleteIdempotent：删除幂等（库与行）、事件只发一次。
 func TestDeleteIdempotent(t *testing.T) {
-	c, sink, prjUsr := newComp(t)
+	c, sink, st := newComp(t)
 	res, err := c.CreateDialog(CreateDialogCmd{Title: "待删"})
 	if err != nil {
 		t.Fatalf("CreateDialog: %v", err)
 	}
-	path := data.DialogDBPath(prjUsr, res.DialogID)
 	if err := c.DeleteDialog(DeleteDialogCmd{DialogID: res.DialogID}); err != nil {
 		t.Fatalf("DeleteDialog: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("库文件应已删除: %v", err)
+	if _, release, err := st.ExistingDialog(res.DialogID); err == nil {
+		release()
+		t.Fatal("对话库应已删除")
 	}
 	if n := sink.count(EventDialogDeleted); n != 1 {
 		t.Fatalf("DialogDeleted 应 1 次，实际 %d", n)

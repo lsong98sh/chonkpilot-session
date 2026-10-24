@@ -1,11 +1,10 @@
 // 依赖方向断言（照 `src/lib/router` 的 TestDepsPureLib 口径）：`chonkpilot-session` 只允许
-// **直接依赖** = 标准库 + `chonkpilot-data`（根包）+ `chonkpilot-chat`。
+// **直接依赖** = 标准库 + 本模块自身包 + `chonkpilot-chat`。
 //
-// 断言对象是 `go list` 的**直接 import 面**（白名单精确匹配）：`chonkpilot-data` 根包的
-// 传递依赖属 data 自己的事（本组件不消费），但组件的直接 import 面才是"依赖方向"的判据；
-// 另用 TestDepsNoUpperLayers 对传递闭包再兜一层（上层实现 / MQ 客户端都不得出现）。
+// 2026-10-24（Persist Provider）：**`chonkpilot-data` 已从依赖图移除**（存储改由注入的
+// `store.Store` 端口决定）；本测试与 TestDepsNoUpperLayers 同时兜住「data 不得再出现」。
 //
-// 任何 `chonkpilot-llm`（server）/ `chonkpilot-gui` / MQ 客户端 / gateway / router 进入
+// 任何 `chonkpilot-llm`（server）/ `chonkpilot-gui` / MQ 客户端 / gateway / router / data 进入
 // 依赖图 → 本测试失败。
 package session
 
@@ -15,11 +14,13 @@ import (
 	"testing"
 )
 
-// depsAllowed 是直接依赖白名单（精确匹配）。
+// depsAllowed 是直接依赖白名单（精确匹配）；本模块自身包按前缀放行。
 var depsAllowed = []string{
-	"github.com/chonkpilot/chonkpilot-data",
 	"github.com/lsong98sh/chonkpilot-chat",
 }
+
+// selfModule 是本模块前缀（组件内部包互相引用不算外部依赖）。
+const selfModule = "github.com/chonkpilot/chonkpilot-session"
 
 func TestDepsPureLib(t *testing.T) {
 	out, err := exec.Command("go", "list", "-f",
@@ -38,10 +39,10 @@ func TestDepsPureLib(t *testing.T) {
 		pkg := parts[0]
 		for _, field := range parts[1:] {
 			for _, imp := range strings.Fields(field) {
-				if imp == "" || isStdlib(imp) || depsAllowedImport(imp) {
+				if imp == "" || isStdlib(imp) || strings.HasPrefix(imp, selfModule) || depsAllowedImport(imp) {
 					continue
 				}
-				t.Fatalf("%s 依赖了白名单外的包 %q（只允许 stdlib + chonkpilot-data + chonkpilot-chat）", pkg, imp)
+				t.Fatalf("%s 依赖了白名单外的包 %q（只允许 stdlib + 本模块 + chonkpilot-chat）", pkg, imp)
 			}
 		}
 	}
@@ -74,6 +75,7 @@ func TestDepsNoUpperLayers(t *testing.T) {
 		t.Fatalf("go list -deps 失败: %v", err)
 	}
 	forbidden := []string{
+		"github.com/chonkpilot/chonkpilot-data",
 		"github.com/chonkpilot/chonkpilot-llm",
 		"github.com/chonkpilot/chonkpilot-gui",
 		"github.com/chonkpilot/chonkpilot-lib/mq",

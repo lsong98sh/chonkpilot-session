@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-data"
 	chat "github.com/lsong98sh/chonkpilot-chat"
 )
 
@@ -87,13 +86,13 @@ func TestComposerBuildOrderAndZones(t *testing.T) {
 	if res.Zones.FullFrom != "t1" || res.Zones.BriefFrom != "" {
 		t.Fatalf("三段边界不符（2 轮全在完整区）: %+v", res.Zones)
 	}
-	wantFixed := data.EstimateTokens("SYS") + data.EstimateTokens("【记忆】M") +
-		data.EstimateTokens("【知识库资产】A") + ToolsTokenEstimate(tools)
+	wantFixed := EstimateTokens("SYS") + EstimateTokens("【记忆】M") +
+		EstimateTokens("【知识库资产】A") + ToolsTokenEstimate(tools)
 	if res.Usage.Fixed != wantFixed || res.Usage.Total != res.Usage.Fixed+res.Usage.History {
 		t.Fatalf("Usage 口径不符: %+v (want Fixed=%d)", res.Usage, wantFixed)
 	}
 	// 历史 token 只算历史轮（不含本轮工具轮）。
-	wantHist := data.EstimateTokensOfMessages(toDataMessages(want[3:5]))
+	wantHist := EstimateTokensOfMessages(toDataMessages(want[3:5]))
 	if res.Usage.History != wantHist {
 		t.Fatalf("Usage.History = %d, want %d", res.Usage.History, wantHist)
 	}
@@ -130,7 +129,7 @@ func TestComposerEmptyGuides(t *testing.T) {
 	if res.Usage.Fixed != 0 {
 		t.Fatalf("空配置下固定开销应为 0: %+v", res.Usage)
 	}
-	if wantHist := data.EstimateTokensOfMessages(toDataMessages(want)); res.Usage.History != wantHist {
+	if wantHist := EstimateTokensOfMessages(toDataMessages(want)); res.Usage.History != wantHist {
 		t.Fatalf("Usage.History = %d, want %d", res.Usage.History, wantHist)
 	}
 }

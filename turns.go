@@ -2,7 +2,7 @@
 // `assemble.go` 的 turn 边界部分，行为逐字不变）。
 package session
 
-import "github.com/chonkpilot/chonkpilot-data"
+import "github.com/chonkpilot/chonkpilot-session/store"
 
 // 系统注入的用户消息 Kind（**不新开 turn 边界**——仍属当前 turn）：
 //   - KindContinue：S6 断链 / length 自动续写注入的「继续」；
@@ -91,10 +91,10 @@ func TurnGroups(projected, hist []Message, turnTokens []TurnToken, currentTurn s
 	return turns, ids, histTurns
 }
 
-// ZoneIDsOf 把三段**计数**（`data.LocateZones`，`Project` 原样带回）换算为 turn id 边界。
+// ZoneIDsOf 把三段**计数**（`LocateZones`，`Project` 原样带回）换算为 turn id 边界。
 //
 // 口径与投影一致：完整区 = 末尾 `FullTurns` 轮；简化区 = 再往前 `BriefTurns` 轮；其余 = 摘要区。
-func ZoneIDsOf(ids []string, z data.Zones) ZoneIDs {
+func ZoneIDsOf(ids []string, z store.Zones) ZoneIDs {
 	if len(ids) == 0 {
 		return ZoneIDs{}
 	}
@@ -118,7 +118,7 @@ func ZoneIDsOf(ids []string, z data.Zones) ZoneIDs {
 
 // RetainStartIndex 返回**压缩保留段**的起点（分组下标）：= 简化区起点；无简化区 → 完整区起点；
 // 保留段只覆盖历史轮（当前轮不写入快照）。无历史轮 → -1。
-func RetainStartIndex(ids []string, z data.Zones, histTurns int) int {
+func RetainStartIndex(ids []string, z store.Zones, histTurns int) int {
 	if histTurns <= 0 || len(ids) == 0 {
 		return -1
 	}

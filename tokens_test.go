@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // TestToolsTokenEstimate：工具 schema（名 + 描述 + 参数 JSON）计入固定开销。
@@ -31,11 +31,11 @@ func TestToolsTokenEstimate(t *testing.T) {
 }
 
 // TestFixedAndHistoryTokens：固定开销 = 系统提示词 + 两条指引 + 工具 schema；
-// 历史 = 各轮消息估算（口径 = data.EstimateTokens*）。
+// 历史 = 各轮消息估算（口径 = EstimateTokens*）。
 func TestFixedAndHistoryTokens(t *testing.T) {
 	sys, mem, asset := "系统提示词层", "记忆指引", "资产指引"
 	tools := []ToolSchema{{Name: "t", Description: "说明"}}
-	want := data.EstimateTokens(sys) + data.EstimateTokens(mem) + data.EstimateTokens(asset) +
+	want := EstimateTokens(sys) + EstimateTokens(mem) + EstimateTokens(asset) +
 		ToolsTokenEstimate(tools)
 	if got := FixedUsage(sys, mem, asset, tools); got != want {
 		t.Fatalf("FixedUsage = %d, want %d", got, want)
@@ -43,7 +43,7 @@ func TestFixedAndHistoryTokens(t *testing.T) {
 	turns := [][]Message{
 		{{Role: "user", Kind: "text", Content: "q1"}, {Role: "assistant", Content: "a1"}},
 	}
-	wantHist := data.EstimateTokensOfMessages([]data.ChatMsg{
+	wantHist := EstimateTokensOfMessages([]store.ChatMsg{
 		{Role: "user", Kind: "text", Content: "q1"}, {Role: "assistant", Content: "a1"},
 	})
 	if got := HistoryTokens(turns); got != wantHist {

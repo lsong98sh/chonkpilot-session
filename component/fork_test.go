@@ -2,14 +2,13 @@
 package component
 
 import (
-	"os"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // seedTree 建一个「主 session + 子会话 + 消息/轮次/快照/任务树/inbox」的对话，返回 ids。
-func seedTree(t *testing.T, c *Component, prjUsr string) (dialogID, mainID, childID, turnID string) {
+func seedTree(t *testing.T, c *Component, st *store.Memory) (dialogID, mainID, childID, turnID string) {
 	t.Helper()
 	d, err := c.CreateDialog(CreateDialogCmd{Title: "源对话"})
 	if err != nil {
@@ -27,23 +26,23 @@ func seedTree(t *testing.T, c *Component, prjUsr string) (dialogID, mainID, chil
 	}
 	if err := c.SetSnapshot(SetSnapshotCmd{
 		DialogID: d.DialogID, SessionID: sub.SessionID, SnapshotTurn: "t-src",
-		History: []data.ChatMsg{{Role: "user", Content: "摘要"}},
+		History: []store.ChatMsg{{Role: "user", Content: "摘要"}},
 	}); err != nil {
 		t.Fatalf("SetSnapshot: %v", err)
 	}
-	// 直写 tasktree / inbox（组件 P4 尚未提供 API，这里按存储形状播种）。
-	db, release, err := data.OpenExistingDialog(prjUsr, d.DialogID)
+	// 直写 tasktree / inbox（组件尚未提供 API，这里按存储形状播种）。
+	db, release, err := st.ExistingDialog(d.DialogID)
 	if err != nil {
 		t.Fatalf("open dialog: %v", err)
 	}
 	defer release()
-	if err := db.Table("tasktree").Insert("n1", data.Record{
+	if err := db.Table("tasktree").Insert("n1", store.Record{
 		"node_id": "n1", "top_session": d.SessionID, "session_id": sub.SessionID,
 		"status": "running", "created_at": "2026-10-24T10:00:00.000000001Z",
 	}); err != nil {
 		t.Fatalf("seed tasktree: %v", err)
 	}
-	if err := db.Table("inbox_items").Insert("i1", data.Record{
+	if err := db.Table("inbox_items").Insert("i1", store.Record{
 		"session_id": sub.SessionID, "type": "insert", "content": "x", "status": "pending",
 		"created_at": "2026-10-24T10:00:00.000000001Z",
 	}); err != nil {
@@ -52,11 +51,11 @@ func seedTree(t *testing.T, c *Component, prjUsr string) (dialogID, mainID, chil
 	return d.DialogID, d.SessionID, sub.SessionID, "t-src"
 }
 
-// TestForkDialogFull 用例 9：新 dialog id + 新文件；库内全部 session 引用已重映射（无旧 id 残留）；
+// TestForkDialogFull 用例 9：新 dialog id + 新库；库内全部 session 引用已重映射（无旧 id 残留）；
 // inbox 清空；发 DialogCreated。
 func TestForkDialogFull(t *testing.T) {
-	c, sink, prjUsr := newComp(t)
-	srcDialog, mainID, childID, _ := seedTree(t, c, prjUsr)
+	c, sink, st := newComp(t)
+	srcDialog, mainID, childID, _ := seedTree(t, c, st)
 	sink.take()
 
 	res, err := c.ForkDialog(ForkDialogCmd{DialogID: srcDialog})
@@ -66,22 +65,24 @@ func TestForkDialogFull(t *testing.T) {
 	if res.DialogID == "" || res.DialogID == srcDialog || res.SessionID == mainID || res.SessionID == childID {
 		t.Fatalf("派生 id 不合法: %+v", res)
 	}
-	if _, err := os.Stat(data.DialogDBPath(prjUsr, res.DialogID)); err != nil {
-		t.Fatalf("目标库文件缺失: %v", err)
+	if _, release, err := st.ExistingDialog(res.DialogID); err != nil {
+		t.Fatalf("目标库缺失: %v", err)
+	} else {
+		release()
 	}
 	if n := sink.count(EventDialogCreated); n != 1 {
 		t.Fatalf("DialogCreated 应 1 次，实际 %d", n)
 	}
 
-	db, release, err := data.OpenExistingDialog(prjUsr, res.DialogID)
+	db, release, err := st.ExistingDialog(res.DialogID)
 	if err != nil {
 		t.Fatalf("open forked: %v", err)
 	}
 	defer release()
 
 	// sessions：主 + 子各 1，且 parent_id 指向新主；forked_from = 源 id。
-	var sessions []data.Record
-	if err := db.Table("sessions").ForEach(func(_ string, rec data.Record) error {
+	var sessions []store.Record
+	if err := db.Table("sessions").ForEach(func(_ string, rec store.Record) error {
 		sessions = append(sessions, rec)
 		return nil
 	}); err != nil {
@@ -107,7 +108,7 @@ func TestForkDialogFull(t *testing.T) {
 	// messages / turns / snapshot 的 session_id 全部指向新 id。
 	for _, table := range []string{"messages", "turns"} {
 		var rows int
-		if err := db.Table(table).ForEach(func(_ string, rec data.Record) error {
+		if err := db.Table(table).ForEach(func(_ string, rec store.Record) error {
 			rows++
 			if oldIDs[sval(rec["session_id"])] {
 				t.Fatalf("%s.session_id 未重映射: %+v", table, rec)
@@ -120,7 +121,7 @@ func TestForkDialogFull(t *testing.T) {
 			t.Fatalf("%s 应有派生行", table)
 		}
 	}
-	var snap data.Record
+	var snap store.Record
 	if ok, err := db.Table("snapshot").Get(res.SessionID, &snap); err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	} else if ok {
@@ -128,7 +129,7 @@ func TestForkDialogFull(t *testing.T) {
 	} else {
 		// 快照属于子会话 → 主 session 无快照是正常的；检查子会话的新 id 有快照。
 		var found bool
-		if err := db.Table("snapshot").ForEach(func(k string, rec data.Record) error {
+		if err := db.Table("snapshot").ForEach(func(k string, rec store.Record) error {
 			if oldIDs[k] {
 				t.Fatalf("snapshot 主键未重映射: %q", k)
 			}
@@ -142,7 +143,7 @@ func TestForkDialogFull(t *testing.T) {
 		}
 	}
 	// tasktree 引用重映射。
-	var taskNode data.Record
+	var taskNode store.Record
 	if ok, err := db.Table("tasktree").Get("n1", &taskNode); err != nil || !ok {
 		t.Fatalf("任务树行缺失: ok=%v err=%v", ok, err)
 	}
@@ -151,7 +152,7 @@ func TestForkDialogFull(t *testing.T) {
 	}
 	// inbox 清空。
 	var inboxRows int
-	if err := db.Table("inbox_items").ForEach(func(_ string, _ data.Record) error {
+	if err := db.Table("inbox_items").ForEach(func(_ string, _ store.Record) error {
 		inboxRows++
 		return nil
 	}); err != nil {
@@ -162,30 +163,25 @@ func TestForkDialogFull(t *testing.T) {
 	}
 
 	// dialogs 行（含 main_session_id）。
-	cat, relCat, err := data.OpenSharedLayer(prjUsr, data.LayerPrjUsr)
-	if err != nil {
-		t.Fatalf("open prjusr: %v", err)
-	}
-	defer relCat()
-	var row data.Record
-	if ok, err := cat.Table("dialogs").Get(res.DialogID, &row); err != nil || !ok {
-		t.Fatalf("派生 dialogs 行缺失: ok=%v err=%v", ok, err)
+	row, ok := dialogRowOf(t, st, res.DialogID)
+	if !ok {
+		t.Fatal("派生 dialogs 行缺失")
 	}
 	if sval(row["main_session_id"]) != res.SessionID {
 		t.Fatalf("dialogs.main_session_id 应为 %s，实际 %v", res.SessionID, row["main_session_id"])
 	}
 }
 
-// TestForkDialogContext 用例 10：不拷文件内容；只有主 session 行 + snapshot；消息为空。
+// TestForkDialogContext 用例 10：不复制库内容；只有主 session 行 + snapshot；消息为空。
 func TestForkDialogContext(t *testing.T) {
-	c, _, prjUsr := newComp(t)
-	srcDialog, mainID, _, _ := seedTree(t, c, prjUsr)
+	c, _, st := newComp(t)
+	srcDialog, mainID, _, _ := seedTree(t, c, st)
 
 	res, err := c.ForkDialog(ForkDialogCmd{DialogID: srcDialog, Mode: ForkModeContext, Title: "上下文分支"})
 	if err != nil {
 		t.Fatalf("ForkDialog(context): %v", err)
 	}
-	db, release, err := data.OpenExistingDialog(prjUsr, res.DialogID)
+	db, release, err := st.ExistingDialog(res.DialogID)
 	if err != nil {
 		t.Fatalf("open forked: %v", err)
 	}
@@ -202,7 +198,7 @@ func TestForkDialogContext(t *testing.T) {
 		t.Fatalf("标题应取命令值: %q", sessions.Sessions[0].Title)
 	}
 	var msgRows int
-	if err := db.Table("messages").ForEach(func(_ string, _ data.Record) error {
+	if err := db.Table("messages").ForEach(func(_ string, _ store.Record) error {
 		msgRows++
 		return nil
 	}); err != nil {
@@ -211,9 +207,8 @@ func TestForkDialogContext(t *testing.T) {
 	if msgRows != 0 {
 		t.Fatalf("context 档不应复制消息，实际 %d 行", msgRows)
 	}
-	// 源主 session 无快照（本用例快照在子会话上）→ 派生库也应无快照，但快照路径不得报错。
 	var snapRows int
-	if err := db.Table("snapshot").ForEach(func(k string, _ data.Record) error {
+	if err := db.Table("snapshot").ForEach(func(_ string, _ store.Record) error {
 		snapRows++
 		return nil
 	}); err != nil {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chonkpilot/chonkpilot-data"
+	"github.com/chonkpilot/chonkpilot-session/store"
 )
 
 // mkToolCall 造一条工具调用（参数已序列化）。
@@ -320,7 +320,7 @@ func TestSplitTurnsAndBoundary(t *testing.T) {
 	if ids[0] != "t1" || ids[1] != "t-cur" {
 		t.Fatalf("轮 id 映射不符：%v", ids)
 	}
-	z := ZoneIDsOf(ids, data.Zones{FullTurns: 1, BriefTurns: 1})
+	z := ZoneIDsOf(ids, store.Zones{FullTurns: 1, BriefTurns: 1})
 	if z.FullFrom != "t-cur" || z.BriefFrom != "t1" {
 		t.Fatalf("三段边界换算不符：%+v", z)
 	}
